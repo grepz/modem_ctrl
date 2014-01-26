@@ -1,0 +1,6 @@
+*.hex
+*.bin
+*.o
+*.elf
+cscope.*
+modem_ctrl

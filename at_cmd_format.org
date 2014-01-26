@@ -1,0 +1,153 @@
+* AT Command Format
+  Here is a summary of the format and syntax of AT commands. Please note that
+  most of the control characters are configurable, and the summary only uses the
+  default control characters.
+
+- AT commands are accepted by the modem only when in command mode. The modem can
+  be forced into command mode with the #+++: Escape Sequence.
+
+- Commands are grouped in command lines.
+
+- Each command line must start with the #AT: Command Prefix and terminated
+  with #<CR>: End-of-line Character. The only exception is the #A/: Repeat
+  Last Command command.
+
+- The body of a command line consists of visible ASCII characters (ASCII code
+  32 to 126). Space (ASCII code 32) and ASCII control characters (ASCII code 0
+  to 31) are ignored, with the exception of #<BS>: Backspace
+  Character, #<CAN>: Cancel Character, and #<CR>: End-of-line Character.
+
+- All characters preceding the #AT: Command Prefix are ignored.
+
+- Interpretation / execution of the command line starts with the reception of
+  the first (and also command-line terminating) #<CR>: End-of-line Character.
+
+- Characters after the initial #AT: Command Prefix and before the #<CR>:
+  End-of-line Character are interpreted as commands. With some exceptions,
+  there can be many commands in one command line.
+
+- Each of the basic commands consists of a single ASCII letter, or a single
+  ASCII letter with a &prefix, followed by a numeric value. Missing numeric
+  values are interpreted as 0 (zero).
+
+- The following commands can't be followed by more commands on the command
+  line. They must always be the last commands in a command line. If they are
+  followed by other commands, these other commands are ignored. However, some
+  of these commands take command modifiers and it is possible that a following
+  command is accidentally interpreted as a command modifier. Therefore, care
+  should be taken to not follow these commands with any more commands on the
+  same command line. Instead, they should be placed in an own command line.
+        #A: Answer Command
+        #D: Dial Command
+        #Z: Soft Reset Command
+
+ - A command line can be edited if the terminating #<CR>: End-of-line Character
+   has not ben entered, using the #<BS>: Backspace Character to delete one
+   command line character at a time. The initial #AT: Command Prefix can't be
+   edited/deleted (it has already been processed, because upon reception of
+   the #AT: Command Prefix the modem immediately starts command line parsing
+   and editing, but not execution).
+
+- The modem echoes command lines and edits when #E: Command State Character
+  Echo Selection is on (surprise, surprise :-)).
+
+- When echo is on, #<BS>: Backspace Characters are echoed with a sequence of
+  <BS> <BS> (backspace, space, backspace) to erase the last character in
+  e.g. a terminal program on the DTE.
+
+- A command line can be cancelled at any time before the terminating #<CR>:
+  End-of-line Character by sending the #<CAN>: Cancel Character. No command in
+  the command line is executed in this case.
+
+- The #A: Answer Command and #D: Dial Command can also be cancelled as long as
+  the handshake with the remote site has not been completed. Cancellation is
+  done by sending an additional character. In theory, it doesn't matter which
+  character. But care has to be taken that cancellation is not attempted when
+  the handshake has already completed. In this case the modem has switched to
+  on-line state (#Command State to On-line State) and the character will be
+  send to the remote side. A save way to avoid this problem is to always use
+  the #+++: Escape Sequence followed by going on-hock with the #H: Hook
+  Command Options. If the modem is already in the on-line state, this will
+  drop the connection. If the modem is still in the handshake phase the first
+  character of the #+++: Escape Sequence will cancel the command (and the rest
+  will be interpreted as a normal command line, doing no harm).
+
+- Command line execution stops when the first command in the command line
+  fails, or the whole command line has been executed. Every command before the
+  failed command has been executed. Every command after the failed command and
+  the failed command in the command line has not been executed.
+
+- There is no particular indication which command in a command line failed,
+  only that one failed. It is best to repeat the complete command line, or to
+  first reset the modem to a defined state before recovering from a failure.
+
+- A modem only accepts a new command line when the previous command line has
+  been executed (half-duplex communication). Therefore, care should be taken
+  to only send the next command line after the result code from the previous
+  command line has been received.
+
+* URC (pg. 30 of manual)
+  To announce pending URC ME will do this:
+
+- ME activates RING line(logic "1") for 1 second, i.e. RING line changesto
+  physical low level. If several URC occurs in quick succession each URC
+  triggers the RING line independently. The result: RING line may stay low
+  for more then 1 sec.
+
+- If AT command interface is busya "BREAK" will be sent immediately but the
+  URC will not be issued until line is free.
+
+** Common URC's
+- ^SYSSTART
+- URC1: <^SBC: Undervoltage>
+- URC2: <^SBC: Overvoltage>
+
+* ATV: Result code format mode
+  ATV[<value>]
+  <value>:
+  - 0: <Text><cr><lf>
+       <Numeric code><cr>
+  - 1: <cr><lf><Text><cr><lf>
+       <cr><lf><Verbose code><cr><lf>
+  Codes:
+  - OK: 0
+  - CONNECT: 1
+  - RING: 2
+  - NO CARRIER: 3
+  - ERROR: 4
+  - NO DIALTONE: 6
+  - BUSY: 7
+  - NO ANSWER: 8
+  - CONNECT 2400/RLP: 47
+  - CONNECT 4800/RLP: 48
+  - CONNECT 9600/RLP: 49
+  - CONNECT 14400/RLP: 50
+  - ALERTING: -
+  - DIALING: -
+
+* AT+CREG
+  AT+CREG=2
+  AT+CREG?
+  Result:
+  AT+CREG?
+  +CREG: <UrcMode>, <RegStatus>, <netLac>, <netCellId>
+  OK/ERROR
+  <UrcMode> - 2
+  <RegStatus> - Registration status
+  <netLac> - Two bytes location area code in hex
+  <netCellId> - Two bytes cell ID in hex
+
+* AT+CSQ???
+
+* AT+CPIN
+  AT+CPIN?
+  +CPIN: <code>
+  OK/ERROR
+
+  AT+CPIN=<pin>
+  OK/ERROR
+
+  <code> - READY: pin entered
+           SIM PIN: Waiting for SIM PIN1
+	   - anything else - ERROR
+  <pin>  - Pin code
