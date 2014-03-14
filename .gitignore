@@ -4,3 +4,5 @@
 *.elf
 cscope.*
 modem_ctrl
+*~
+*.log

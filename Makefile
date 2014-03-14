@@ -5,10 +5,11 @@ LD = ld
 
 DEFS = -DDEBUG
 
-CFLAGS = -O0
+# -rdynamic
+CFLAGS = -O0 -g -fno-stack-protector
 CFLAGS += -Wall -Wextra -Warray-bounds -pthread
 
-SRCS = main.c modem.c
+SRCS = main.c modem.c bson/bson.c bson/encoding.c bson/numbers.c
 
 all: $(PRODUCT)
 
