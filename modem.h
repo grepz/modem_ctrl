@@ -281,12 +281,14 @@ modem_ret_t modem_configure(void);
 /**
  * Send data over tcp socket.
  *
+ * @param prof Profile to use
  * @param data Data to send
  * @param len Data length to send
  *
  * @return see modem_ret_t
  */
-modem_ret_t modem_send_packet(const uint8_t *data, size_t len);
+modem_ret_t modem_send_packet(unsigned int prof,
+                              const uint8_t *data, size_t len);
 /**
  * Send AT+CEER command and receive extended error report
  *

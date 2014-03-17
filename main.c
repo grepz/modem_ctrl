@@ -91,6 +91,9 @@ int main(int argc, char *argv[])
 
     printf("Started, device '%s' used\n", argv[1]);
 
+__modem_start:
+    sleep(10);
+
     ret = modem_init("/dev/ttyUSB0");
     if (ret != MODEM_RET_OK) {
         printf("Error initializing modem=%d\n", ret);
@@ -110,14 +113,23 @@ int main(int argc, char *argv[])
         sleep(1);
         modem_status_get(&status, &err);
         printf("Status=%04X, Error=%04X\n", status, err);
+
+        if ((status & MODEM_STATUS_ONLINE) == 0) { /* Full restart */
+            modem_destroy();
+            goto __modem_start;
+        }
         if ((status & MODEM_STATUS_REG) == 0) { /* No network registration */
             modem_send_cmd(MODEM_CMD_CREG_GET, NULL, NULL, NULL, 1);
             continue;
         }
-
         if ((status & MODEM_STATUS_CONN) == 0) {
             ret = modem_conn_start(TCS_SERV_PROF);
             printf("Starting connection=%d\n", ret);
+            if (ret != MODEM_RET_OK) {
+                ret = modem_conn_stop(TCS_SERV_PROF);
+                printf("Stopping connection=%d\n", ret);
+            }
+            continue;
         }
     }
 

@@ -14,7 +14,6 @@
  * Code:
  */
 
-
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -58,6 +57,8 @@
 #define URC_SYSSTART "^SYSSTART"
 #define URC_SHUTDOWN "^SHUTDOWN"
 
+#define IS_URC(str) (!memcmp(__urcp.buf, (str), strlen(str)))
+
 #ifdef MODEM_DEBUG
 #define dbg(format, arg...) printf("[DEBUG] "format, ##arg)
 #else
@@ -71,10 +72,10 @@
             return ret;                         \
     } while (0)
 
-static modem_dev_t  __modem;                    /* Modem control structure  */
-static urc_parser_t __urcp;                     /* URC parser               */
-static cmd_parser_t __cmdp;                     /* Command parser           */
-static at_cmd_t     __atcmd;                    /* AT command buffer        */
+static modem_dev_t  __modem; /* Modem control structure  */
+static urc_parser_t __urcp;  /* URC parser               */
+static cmd_parser_t __cmdp;  /* Command parser           */
+static at_cmd_t     __atcmd; /* AT command buffer        */
 
 modem_cmd_t modem_cmd[] = {
     {MODEM_CMD_ECHO_SET,      "ATE#",                    1},
@@ -113,7 +114,7 @@ static void __reset_CMD_parser(void);
 
 static int  __process_CMD(const char *buf, size_t sz);
 static void __process_URC(const char *buf, size_t sz);
-static void __parse_URC_cmd(void);
+static void __parse_URC(void);
 
 modem_ret_t modem_init(const char *path)
 {
@@ -175,6 +176,8 @@ modem_ret_t modem_init(const char *path)
     __modem.status = MODEM_STATUS_ONLINE;
     __modem.err    = 0;
     pthread_mutex_unlock(&__modem.lock);
+
+    modem_send_raw((uint8_t *)"\r\r\r\r\r\r\r\r\r\r", 10);
 
     return 0;
 }
@@ -422,26 +425,32 @@ modem_ret_t modem_configure(void)
     return MODEM_RET_OK;
 }
 
-modem_ret_t modem_send_packet(const uint8_t *data, size_t len)
+modem_ret_t modem_send_packet(unsigned int prof,
+                              const uint8_t *data, size_t len)
 {
 //    modem_ret_t ret;
-    char        plen[5];
+    char        plen[5], sprof[2];
     uint8_t     ps[2];
     uint16_t    len_no;
 
     if ((len + 2) & 0x1FFFF0000)
         return MODEM_RET_PARAM;
+    if (prof > 9)
+        return MODEM_RET_PARAM;
+
+    sprof[0] = (char)(48 + prof);
+    sprof[1] = '\0';
 
     len_no = htons(len);
     memcpy(ps, &len_no, 2);
 
     snprintf(plen, 5, "%d", (uint16_t)(len + 2));
     CHECK_RET(modem_send_cmd(MODEM_CMD_PACKET_SEND1,
-                             NULL,NULL,NULL,1,"1",plen));
+                             NULL, NULL, NULL, 1, "1", plen));
     CHECK_RET(modem_send_raw(ps, 2));
     CHECK_RET(modem_send_raw(data, len));
     CHECK_RET(modem_send_cmd(MODEM_CMD_PACKET_SEND2,
-                             NULL,NULL,NULL,1,"1","0","0"));
+                             NULL, NULL, NULL, 1, sprof, "0", "0"));
 
     return MODEM_RET_OK;
 }
@@ -609,7 +618,7 @@ static void __process_URC(const char *buf, size_t sz)
             /* <CMDID>: <DATA> */
             if (buf[i] == '\n') {
                 __urcp.buf[__urcp.ind] = '\0';
-                __parse_URC_cmd();
+                __parse_URC();
             }
             __urcp.urc_state = URC_PARSER_NONE;
             break;
@@ -658,9 +667,8 @@ static void __parse_URC_SISW(void)
     prof    = strtol(__urcp.buf + 7, NULL, 10);
     urcCode = strtol(__urcp.buf + 9, NULL, 10);
 
-    if (prof == 0 && urcCode == 1) {
-        __modem.status |= MODEM_STATUS_CONN;
-    }
+    if (prof == 0 && urcCode == 1)
+        __modem.status |= (MODEM_STATUS_CONN|MODEM_STATUS_WREADY);
 }
 
 static void __parse_URC_SISR(void)
@@ -677,15 +685,33 @@ static void __parse_URC_SISR(void)
     }
 }
 
-static void __parse_URC_cmd(void)
+static void __parse_URC_SIS(void)
+{
+    char msg[128];
+    unsigned int prof;
+    unsigned int urc_cause, urc_infoid;
+
+    prof       = strtol(__urcp.buf + 6,  NULL, 10);
+    urc_cause  = strtol(__urcp.buf + 8,  NULL, 10);
+    urc_infoid = strtol(__urcp.buf + 10, NULL, 10);
+
+    dbg("Error. Profile=%d; Cause=%d; Info=%d\n", prof, urc_cause, urc_infoid);
+}
+
+
+static void __parse_URC(void)
 {
     dbg("URC: ");
     __print_output((uint8_t *)__urcp.buf, 0, __urcp.ind);
 
-    if (!memcmp(__urcp.buf, "+CREG:", 6)) {
+    if (IS_URC("+CREG:")) {
         __parse_URC_CREG();
-    } else if (!memcmp(__urcp.buf, "^SISW:", 6)) {
+    } else if (IS_URC("^SISW:")) {
         __parse_URC_SISW();
+    } else if (IS_URC("^SISR:")) {
+        __parse_URC_SISR();
+    } else if (IS_URC("^SIS:")) {
+        __parse_URC_SIS();
     }
 }
 
@@ -718,19 +744,4 @@ static void __print_output(const unsigned char *buf, off_t s, size_t sz)
 }
 #else
 #define __print_output(x...) do { } while (0)
-#endif
-
-#if 0
-void modem_flush(unsigned int delay)
-{
-    /* Wait while modem thread will empty the device RX buffer */
-    if (delay == 0)
-        GRACE_TIME(MODEM_WAIT_FLUSH_SLEEP);
-    else
-        GRACE_TIME(delay);
-
-    pthread_mutex_lock(&__modem.lock);
-    /* Set RX buffer contents and index to 0 */
-    pthread_mutex_unlock(&__modem.lock);
-}
 #endif

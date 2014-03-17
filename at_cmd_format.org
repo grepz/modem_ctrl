@@ -246,6 +246,21 @@
 |           |                                                        |        |
 
 
+* AT/URC
+
+| AT      | URC                                               |
+|---------+---------------------------------------------------|
+| AT+CFUN | ^SYSSTART                                         |
+| AT^SMSO | ^SHUTDOWN                                         |
+| AT+CREG | +CREG: <reg>                                      |
+| AT+CREG | +CREG: <reg>, <netLac>, <netCellID>               |
+| AT+CUSD | +CUSD: <ussdStatus>, <ussdRsp>, <ussdDCS>         |
+| AT^SISR | ^SISR: <prof>,<urcCauseID>                        |
+| AT^SISW | ^SISW: <prof>,<urcCauseID>                        |
+| (SIS)   | ^SIS: <prof>,<urcCause>,<urcInfoID>,<urcInfoText> |
+|         |                                                   |
+
+
 * Logic
 ** Start
    1. Look for ^SYSSTART. If not found, reset modem and try again.

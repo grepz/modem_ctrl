@@ -63,26 +63,3 @@ int circ_buf_str(circ_buf_t *cb, const uint8_t *str, off_t off, size_t sz)
 
     return -1;
 }
-
-#if 0
-static int __rx_buf_str(rx_buf_t *rxb, const uint8_t *str, size_t sz)
-{
-    while (!__rx_buf_empty(rxb)) {
-        if (i == 0) {
-            ch = __rx_buf_get(rxb);
-        }
-
-        for (i = 0; i < sz; i++) {
-            if (ch != str[i] || __rx_buf_empty(rxb))
-                break;
-
-            ch = __rx_buf_get(rxb);
-        }
-
-        if (i == sz)
-            return 0;
-    }
-
-    return 1;
-}
-#endif
