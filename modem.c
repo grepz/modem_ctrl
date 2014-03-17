@@ -1,5 +1,23 @@
+/* C source code header -*- coding: utf-8 -*-
+ * Created: [21.41:29 Март 17 2014]
+ * Modified: [21.41:30 Март 17 2014]
+ *  ---------------------------
+ * Author: Stanislav M. Ivankin
+ * Email: lessgrep@gmail.com
+ * Tags: modem,at,parser
+ * License: LGPL-2.1
+ *  ---------------------------
+ * Description:
+ */
+
+/*
+ * Code:
+ */
+
+
 #include <stdlib.h>
 #include <stdio.h>
+
 #include <stdint.h>
 #include <termios.h>
 #include <unistd.h>
