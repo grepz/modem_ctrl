@@ -1,0 +1,10 @@
+# -*- Makefile -*-
+
+CC = gcc
+LD = ld
+
+DEFS = -DDEBUG
+
+# -rdynamic
+CFLAGS = -O0 -g -fno-stack-protector
+CFLAGS += -Wall -Wextra -Warray-bounds -pthread

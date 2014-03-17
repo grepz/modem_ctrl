@@ -1,6 +1,10 @@
 #ifndef __MODEM_H
 #define __MODEM_H
 
+#define CMD_PARSER_BUF_SZ 1024
+#define URC_PARSER_BUF_SZ 256
+#define MODEM_CMDBUF_SZ   256
+
 /* Page 277 of manual */
 #define MODEM_AT_CONN_ERROR     -1 /* Software error */
 #define MODEM_AT_CONN_ALLOCATED  2 /* Profile resource allocated */
@@ -84,22 +88,24 @@ typedef enum {
 } modem_cmd_id_t;
 
 typedef enum {
-    MODEM_STATUS_ONLINE   = 1 << 0, /* Modem is initialized */
-    MODEM_STATUS_REG      = 1 << 1, /* Modem registered in network */
-    MODEM_STATUS_CONN     = 1 << 2, /* Modem connected to server */
-    MODEM_STATUS_WREADY   = 1 << 3, /* Ready to send actual data */
-    MODEM_STATUS_RREADY   = 1 << 4, /* There is data to read */
-    MODEM_STATUS_URCMODE  = 1 << 5, /* URC mode enabled */
-    MODEM_STATUS_SHUTDOWN = 1 << 6, /* URC message received */
-    MODEM_STATUS_BUFOVR   = 1 << 7, /* Buffer overflow, buffer was reset */
-    MODEM_STATUS_ERR      = 1 << 8, /* Error, see modem_err_t */
+    MODEM_STATUS_ONLINE   = 1 << 0,  /* Modem is initialized              */
+    MODEM_STATUS_REG      = 1 << 1,  /* Modem registered in network       */
+    MODEM_STATUS_CONN     = 1 << 2,  /* Modem connected to server         */
+    MODEM_STATUS_WREADY   = 1 << 3,  /* Ready to send actual data         */
+    MODEM_STATUS_RREADY   = 1 << 4,  /* There is data to read             */
+    MODEM_STATUS_URCMODE  = 1 << 5,  /* URC mode enabled                  */
+    MODEM_STATUS_SHUTDOWN = 1 << 6,  /* URC message received              */
+    MODEM_STATUS_BUFOVR   = 1 << 7,  /* Buffer overflow, buffer was reset */
+    MODEM_STATUS_ERR      = 1 << 8,  /* Error, see modem_err_t            */
+    MODEM_STATUS_CMDCHECK = 1 << 9,  /* Check for command reply           */
+    MODEM_STATUS_REPLY    = 1 << 10, /* Reply received                    */
 } modem_status_t;
 
 typedef enum {
-    MODEM_ERR_IO           = 1 << 0, /* I/O error */
-    MODEM_ERR_EOF          = 1 << 1, /* Device closed? */
-    MODEM_ERR_URC_OVRVOLT  = 1 << 2, /* Overvoltage */
-    MODEM_ERR_URC_UNDVOLT  = 1 << 3, /* Undervoltage */
+    MODEM_ERR_IO           = 1 << 0, /* I/O error        */
+    MODEM_ERR_EOF          = 1 << 1, /* Device closed?   */
+    MODEM_ERR_URC_OVRVOLT  = 1 << 2, /* Overvoltage      */
+    MODEM_ERR_URC_UNDVOLT  = 1 << 3, /* Undervoltage     */
     MODEM_ERR_URC_SYSSTART = 1 << 4, /* System restarted */
 } modem_err_t;
 
@@ -110,16 +116,31 @@ typedef enum {
     MODEM_RET_IO,
     MODEM_RET_MEM,
     MODEM_RET_SYS,
+    MODEM_RET_AT,
     MODEM_RET_TIMEOUT,
     MODEM_RET_UNKN,
 } modem_ret_t;
 
 typedef enum {
-    URC_PARSER_NONE,
+    URC_PARSER_NONE = 0,
     URC_PARSER_CMD_CHECK,
     URC_PARSER_DATA_CHECK,
     URC_PARSER_DATA_ENDCHECK,
 } urc_parser_state_t;
+
+typedef enum {
+    CMD_PARSER_NONE = 0,
+    CMD_PARSER_REPLY,
+    CMD_PARSER_DELIM,
+    CMD_PARSER_ENDCHECK,
+} cmd_parser_state_t;
+
+typedef struct __at_cmd
+{
+    char         buf[MODEM_CMDBUF_SZ];
+    unsigned int ind;
+    size_t       len;
+} at_cmd_t;
 
 typedef struct __modem_cmd
 {
@@ -150,22 +171,22 @@ typedef struct __modem_dev
     conn_state_t    conn;   /* Connection state and parameters */
 } modem_dev_t;
 
-#define RX_BUF_SZ 1024
-
-typedef struct __rx_buf
-{
-    off_t   start;
-    off_t   end;
-    uint8_t buf[RX_BUF_SZ];
-} rx_buf_t;
-
 typedef struct __urc_parser
 {
-    urc_parser_state_t urc_state;
-    char               buf[256];
-    char               *cmd_end;
-    unsigned int       ind;
+    urc_parser_state_t urc_state; /* Parser state */
+    char               buf[URC_PARSER_BUF_SZ];
+    char               *cmd_end;  /* If format is '<CMD>:', points to ':' */
+    unsigned int       ind;       /* Index to save data in buffer */
 } urc_parser_t;
+
+typedef struct __cmd_parser
+{
+    cmd_parser_state_t cmd_state;          /* Parser state */
+    char               *resptr;            /* Pointer to a command
+                                            * result(numeric) */
+    char               buf[CMD_PARSER_BUF_SZ];
+    unsigned int       ind;                /* Index to save data in buffer */
+} cmd_parser_t;
 
 #define GRACE_TIME(time) \
     do {                 \
@@ -209,7 +230,7 @@ void modem_err_clear(void);
  *
  * @return see modem_ret_t
  */
-modem_ret_t modem_send_raw(const char *data, size_t len);
+modem_ret_t modem_send_raw(const uint8_t *data, size_t len);
 /**
  * Send preformatted command to a modem device
  *
@@ -217,12 +238,13 @@ modem_ret_t modem_send_raw(const char *data, size_t len);
  * @param reply If not NULL look for reply if command was successfully sent to
  *              modem
  * @param sz if reply is not NULL stores reply length
+ * @param res If reply and res not NULL return command result
  * @param delay If non-zero, sleep for AT_TIMEOUT_REPLY_WAIT
  *
  * @return see modem_ret_t
  */
 modem_ret_t modem_send_cmd(modem_cmd_id_t id, char *reply, ssize_t *sz,
-                           unsigned int delay, ...);
+                           int *res, unsigned int delay, ...);
 /**
  * Get previous command reply
  *
@@ -233,13 +255,6 @@ modem_ret_t modem_send_cmd(modem_cmd_id_t id, char *reply, ssize_t *sz,
  * @return see modem_ret_t
  */
 modem_ret_t modem_get_reply(char *data, ssize_t *len, int *result);
-/**
- * Flush modem RX buffer
- *
- * @param delay Delay before flushing, if delay is zero wait for
- *               MODEM_WAIT_FLUSH_SLEEP
- */
-void modem_flush(unsigned int delay);
 /**
  * Starts already configured socket connections
  *
@@ -271,7 +286,7 @@ modem_ret_t modem_configure(void);
  *
  * @return see modem_ret_t
  */
-modem_ret_t modem_send_packet(char *data, size_t len);
+modem_ret_t modem_send_packet(const uint8_t *data, size_t len);
 /**
  * Send AT+CEER command and receive extended error report
  *
@@ -281,13 +296,5 @@ modem_ret_t modem_send_packet(char *data, size_t len);
  * @return see modem_ret_t
  */
 modem_ret_t modem_get_err(int *loc, int *reason);
-/**
- * Set/clear URC mode for mode
- *
- * @param sw Switch, 0 - clear URC mode, anything else - set
- *
- * @return see modem_ret_t
- */
-modem_ret_t modem_set_urcmode(uint8_t sw);
 
 #endif
