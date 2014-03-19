@@ -15,8 +15,11 @@
  */
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+
+#include <time.h>
 
 #include <errno.h>
 
@@ -62,4 +65,16 @@ int circ_buf_str(circ_buf_t *cb, const uint8_t *str, off_t off, size_t sz)
     } while (peek != cb->start);
 
     return -1;
+}
+
+void pretty_time(char *str)
+{
+    time_t now;
+    struct tm now_tm;
+
+    now = time(NULL);
+    gmtime_r(&now, &now_tm);
+
+    snprintf(str, 9, "%02d.%02d:%02d",
+             now_tm.tm_hour, now_tm.tm_min, now_tm.tm_sec);
 }

@@ -1,9 +1,20 @@
 #ifndef __MODEM_H
 #define __MODEM_H
 
-#define CMD_PARSER_BUF_SZ 1024
-#define URC_PARSER_BUF_SZ 256
-#define MODEM_CMDBUF_SZ   256
+#define GSM_CONN_PROF    0 /* Default connection profile */
+#define TCS_SERVICE_PROF 0 /* TCS service profile number */
+
+#define REPLY_DEFAULT_TIMEOUT 30  /* Default reply timeout */
+#define REPLY_REG_TIMEOUT     300 /* GPRS service registration timeout. It
+                                     can take up to 5 minutes to register
+                                     in providers network */
+#define MODEM_BITRATE 115200 /* BGS2-W-R2 with factory settings works on
+                                autobauding which means some URC messages are
+                                skip, so we setup bitrate as we see fit */
+
+#define CMD_PARSER_BUF_SZ 1024 /* Max reply len */
+#define URC_PARSER_BUF_SZ 256  /* Max URC len */
+#define MODEM_CMDBUF_SZ   256  /* Max cmd len */
 
 /* Page 277 of manual */
 #define MODEM_AT_CONN_ERROR     -1 /* Software error */
@@ -44,6 +55,17 @@
 #define MODEM_AT_REG_UNKNOWN   4 /* Not used */
 #define MODEM_AT_REG_ROAMING   5 /* ME is on foreign network */
 
+/**** URC codes begin ****/
+/* See at_cmd_format.org */
+/*************************/
+
+#define AT_URC_SISW_WREADY  1
+#define AT_URC_SISW_WCLOSED 2
+
+#define AT_URC_SISR_RPEND   1
+#define AT_URC_SISR_RCLOSED 2
+
+/***** URC codes end *****/
 
 #define AT_RESULT_CODE_OK            0
 #define AT_RESULT_CODE_CONNECT       1
@@ -59,6 +81,24 @@
 #define AT_RESULT_CODE_CONNECT_14400 50
 
 typedef enum {
+    URC_INFOID_SOCK_BADADDR     = 3,
+    URC_INFOID_SOCK_NETUNAVAIL  = 13,
+    URC_INFOID_SOCK_CONNABORT   = 14,
+    URC_INFOID_SOCK_CONNRESET   = 15,
+    URC_INFOID_SOCK_NOBUF       = 16,
+    URC_INFOID_SOCK_CONNTIMEOUT = 20,
+    URC_INFOID_SOCK_CONNREJECT  = 21,
+    URC_INFOID_SOCK_HOSTUNREACH = 22,
+    URC_INFOID_SOCK_UNEXPERR    = 23,
+    URC_INFOID_DNS_NOHOST       = 24,
+    URC_INFOID_DNS_UNRECERR     = 26,
+    URC_INFOID_UNKNERR          = 46,
+    URC_INFOID_SOCK_PEERCLOSE   = 48,
+    URC_INFOID_NOMEM            = 49,
+    URC_INFOID_INTERR           = 50,
+} urc_infoid_t;
+
+typedef enum {
     MODEM_CMD_ECHO_SET = 0,
     MODEM_CMD_QUALITY_GET,
     MODEM_CMD_IMEI_GET,
@@ -70,6 +110,7 @@ typedef enum {
     MODEM_CMD_SISS,
     MODEM_CMD_PACKET_SEND1,
     MODEM_CMD_PACKET_SEND2,
+    MODEM_CMD_PACKET_READ,
     MODEM_CMD_CONN_START,
     MODEM_CMD_CONN_STOP,
     MODEM_CMD_CONN_CHECK,
@@ -84,6 +125,8 @@ typedef enum {
     MODEM_CMD_BAUD_SET,
     MODEM_CMD_SCFG,
     MODEM_CMD_RESCODE_FMT,
+    MODEM_CMD_SAVE_PROFILE,
+    MODEM_CMD_GPRS_REG,
     MODEM_CMD_FLUSH,
 } modem_cmd_id_t;
 
@@ -92,7 +135,7 @@ typedef enum {
     MODEM_STATUS_REG      = 1 << 1,  /* Modem registered in network       */
     MODEM_STATUS_CONN     = 1 << 2,  /* Modem connected to server         */
     MODEM_STATUS_WREADY   = 1 << 3,  /* Ready to send actual data         */
-    MODEM_STATUS_RREADY   = 1 << 4,  /* There is data to read             */
+    MODEM_STATUS_RPEND    = 1 << 4,  /* There is data to read             */
     MODEM_STATUS_URCMODE  = 1 << 5,  /* URC mode enabled                  */
     MODEM_STATUS_SHUTDOWN = 1 << 6,  /* URC message received              */
     MODEM_STATUS_BUFOVR   = 1 << 7,  /* Buffer overflow, buffer was reset */
@@ -239,7 +282,8 @@ modem_ret_t modem_send_raw(const uint8_t *data, size_t len);
  *              modem
  * @param sz if reply is not NULL stores reply length
  * @param res If reply and res not NULL return command result
- * @param delay If non-zero, sleep for AT_TIMEOUT_REPLY_WAIT
+ * @param delay If zero wait for reply for MODEM_WAIT_REPLY_SLEEP, else use
+ *              delay value
  *
  * @return see modem_ret_t
  */
@@ -289,6 +333,16 @@ modem_ret_t modem_configure(void);
  */
 modem_ret_t modem_send_packet(unsigned int prof,
                               const uint8_t *data, size_t len);
+/**
+ * Get data using tcp socket
+ *
+ * @param prof Profile to use
+ * @param data Data buffer to save to
+ * @param sz Data len
+ *
+ * @return see modem_ret_t
+ */
+modem_ret_t modem_get_packet(unsigned int prof, uint8_t *data, ssize_t *sz);
 /**
  * Send AT+CEER command and receive extended error report
  *

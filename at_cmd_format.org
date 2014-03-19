@@ -152,34 +152,6 @@
 	   - anything else - ERROR
   <pin>  - Pin code
 
-* Configuration
-** Setup baud
-   - Set mode: AT+IPR=<Mode>, Where Mode=(1200..230400) We use 115200
-** Setup URC mode
-   - Setup URC mode: at^scfg="Tcp/WithURCs", "on"
-   - Turn off URC mode: at^scfg="Tcp/WithURCs", "off"
-** Registration setup
-   AT+CREG=2, set output to +CREG: <regstatus>[, <netLac>, <netCellID>]
-** Change result code format
-   ATV<Number>,
-   Number:
-     0 - Format: <Numeric code>\r
-     1 - \r\n<Verbose code>\r\n
-   See modem.h for verbose/numeric definitions
-** Configure Internet Connection Setup Profile
-   AT^SICS=<ProfileID>,<Parameter>,<Value>
-   Parameters:
-     - ConType: GPRS0
-** Configure Internet Service Setup Profile
-   AT^SISS=<ProfileID>,<Parameter>,<Value>
-   Parameters:
-     - SrvType: Socket
-     - ConID: SICS profile ID
-     - Address: socktcp://hostname:<port> We also can add ';disnagle=1'
-     - tcpMR: See SCFG Tcp/MaxRetransmissions parameter
-     - tcpOT: See SCFG Tcp/OverallTimeout parameter
-     - secOpt: TLS(see AT^SIND, AT^SBNW, AT^SBNR
-
 * URC codes
   - ^SYSSTART - means system is started
   - ^SBC: <Overvoltage|Undervoltage>
@@ -267,3 +239,78 @@
    2. Set baud, set urc mode, result code.
    3. Configure SICS
    4. Configure SISS
+
+* Notes
+  - Сheck SISS tcpOT
+
+* Process
+** Configuration
+*** Basic configuration [3/4]
+- [X] Bitrate setup
+  AT+IPR=<Mode>, where Mode=(1200..230400)
+
+- [X] Change result code format to 0
+  ATV<Number>, Number - 0/1.
+  0: <Numberic code>\r
+  1: \r\n<Verbose code>\r\n
+
+- [X] Enable network registration URC messages
+  AT+CREG=2, set output to +CREG: <regstatus>[, <netLac>, <netCellID>]
+
+- [ ] Enable CUSD
+  AT+CUSD=1
+
+*** Attach GPRS service [1/1]
+- [X] Try to register with AT+CGATT=1, timeout for 5 minutes, waiting for OK
+
+*** Profile setup [2/3]
+- [X] If configuration is present [3/3]
+  - [X] Configure Internet Connection Setup Profile
+    AT^SICS=<ProfileID>,<Parameter>,<Value>
+    Set ConType to GPRS0
+    Set DNS1/DNS2, User, Passwd, apn if needed
+
+  - [X] Configure Internet Service Setup Profile
+    AT^SISS=<ProfileID>,<Parameter>,<Value>
+    Setup SrvType, ConID(connection profile to use), Address
+
+  - [X] Save configuration with AT^SIPS=all,save
+
+- [ ] If no configuration is present
+  - [ ] Load configuration with AT^SIPS=all,load
+
+- [X] Setup URC messages for internet connection: at^scfg="Tcp/WithURCs", "on"
+
+** Working cycle
+*** Check for URC in loop
+- Check for ^SISW:
+  ^SISW: <SrvProfId>, <urcCauseId>
+  if urcCauseId == 1:
+    Set WREADY status
+  If urcCauseId == 2:
+    Remove WREADY status. Service may be closed.
+
+- Check for ^SISR:
+  ^SISR: <SrvProfId>, <urcCauseId>
+  if urcCauseId == 1:
+    Set RPEND status. We have data to read.
+  if urcCauseId == 2
+    Remove RPEND status. Service may be closed.
+
+- Check for ^SIS:
+  ^SIS: <SrvProfiId>, <urcCause>[, <urcInfoId>[, <urcInfoText>]]
+  if urcCause == 0 && urcInfoId == URC_INFOID_SOCK_PEERCLOSE
+    Reset connection state
+
+- Check for SYSSTART
+  Completly reinit modem functions
+
+- Check for SHUTDOWN
+  Stop modem functions
+
+- Check for +CREG
+  see  __parse_URC_CREG
+
+*** Check after SISO
+- After service is opened with AT^SISO, we should receive
+  ^SISW: <SrvProfId>,1

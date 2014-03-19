@@ -47,4 +47,6 @@ static inline char circ_buf_get(circ_buf_t *cb)
     return ch;
 }
 
+void pretty_time(char *str);
+
 #endif /* __UTILS_H */

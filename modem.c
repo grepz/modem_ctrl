@@ -41,18 +41,14 @@
 
 #define POLL_FDNUM 1
 
-#define MODEM_WAIT_REPLY_TRIES 100
-#define MODEM_WAIT_REPLY_SLEEP 100000
 #define MODEM_WAIT_FLUSH_SLEEP 50000
-
 #define MODEM_SYSSTART_WAIT_TRIES 100
 
 #define MODEM_CMDBUF_SZ  256
-#define MODEM_RXBUF_SZ   2048
 #define MODEM_READ_BYTES 256
 
-/* Default reply timeout */
-#define AT_TIMEOUT_REPLY_WAIT 50000
+/* Grace time */
+#define AT_TIMEOUT_REPLY_WAIT 100000
 
 #define URC_SYSSTART "^SYSSTART"
 #define URC_SHUTDOWN "^SHUTDOWN"
@@ -60,7 +56,14 @@
 #define IS_URC(str) (!memcmp(__urcp.buf, (str), strlen(str)))
 
 #ifdef MODEM_DEBUG
-#define dbg(format, arg...) printf("[DEBUG] "format, ##arg)
+#define dbg(format, arg...)                           \
+    do {                                              \
+        char str[9];                                  \
+        pretty_time(str);                             \
+        printf("[DEBUG/%s] ", str);                   \
+        printf(format, ##arg);                        \
+    } while (0)
+
 #else
 #define dbg(x...) do {} while (0)
 #endif
@@ -70,6 +73,12 @@
         modem_ret_t ret;                        \
         if ((ret = (x)) != MODEM_RET_OK)        \
             return ret;                         \
+    } while (0)
+
+#define FILL_PROF(str,prof)                     \
+    do {                                        \
+        (str)[0] = (char)(48 + (prof));         \
+        (str)[1] = '\0';                        \
     } while (0)
 
 static modem_dev_t  __modem; /* Modem control structure  */
@@ -89,6 +98,7 @@ modem_cmd_t modem_cmd[] = {
     {MODEM_CMD_SISS,          "AT^SISS=#,#,#",           3},
     {MODEM_CMD_PACKET_SEND1,  "AT^SISW=#,#",             2},
     {MODEM_CMD_PACKET_SEND2,  "AT^SISW=#,#,#",           3},
+    {MODEM_CMD_PACKET_READ,   "AT^SISR=#,#",             2},
     {MODEM_CMD_CONN_START,    "AT^SISO=#",               1},
     {MODEM_CMD_CONN_STOP,     "AT^SISC=#",               1},
     {MODEM_CMD_CONN_CHECK,    "AT^SISI=#",               1},
@@ -103,11 +113,18 @@ modem_cmd_t modem_cmd[] = {
     {MODEM_CMD_BAUD_SET,      "AT+IPR=#",                1},
     {MODEM_CMD_SCFG,          "AT^SCFG=#,#",             2},
     {MODEM_CMD_RESCODE_FMT,   "ATV#",                    1},
+    {MODEM_CMD_SAVE_PROFILE,  "AT^SIPS=#,#",             2},
+    {MODEM_CMD_GPRS_REG,      "AT+CGATT=#",              1},
     {MODEM_CMD_FLUSH,         "\r\r\r\r\r\r",            0},
     {-1, NULL, -1},
 };
 
+#ifdef MODEM_DEBUG
 static void __print_output(const unsigned char *buf, off_t s, size_t sz);
+#else
+#define __print_output(x...) do { } while (0)
+#endif /* MODEM_DEBUG */
+
 static void *__modem_thread(void *arg);
 
 static void __reset_CMD_parser(void);
@@ -177,7 +194,7 @@ modem_ret_t modem_init(const char *path)
     __modem.err    = 0;
     pthread_mutex_unlock(&__modem.lock);
 
-    modem_send_raw((uint8_t *)"\r\r\r\r\r\r\r\r\r\r", 10);
+    modem_send_cmd(MODEM_CMD_FLUSH, NULL, NULL, NULL, 0);
 
     return 0;
 }
@@ -207,7 +224,7 @@ modem_ret_t modem_get_err(int *loc, int *reason)
     modem_ret_t ret;
     int         unused, sret;
 
-    ret = modem_send_cmd(MODEM_CMD_CEER, reply, &len, NULL, 1);
+    ret = modem_send_cmd(MODEM_CMD_CEER, reply, &len, NULL, 0);
     if (ret != MODEM_RET_OK)
         return ret;
 
@@ -243,13 +260,18 @@ modem_ret_t modem_get_reply(char *data, ssize_t *len, int *res)
     dbg("Result(%d): ", __cmdp.ind);
     __print_output((uint8_t *)__cmdp.buf, 0, __cmdp.ind);
 
+    /* Calculate reply size(without AT result code and command echo */
     *len = (unsigned int)(__cmdp.resptr - __cmdp.buf);
-
     memcpy(data, __cmdp.buf, *len);
-    if (res != NULL) {
+    /* If res is supplied, return AT result code */
+    if (res != NULL)
         *res = atoi(__cmdp.resptr);
-    }
+
     __modem.status &= ~MODEM_STATUS_REPLY;
+    /* Get rid of command. We have to check for SISW and SISR URC's and
+       sometimes they can match with commands/replies being looked for. */
+    __atcmd.buf[0] = '\0';
+
     pthread_mutex_unlock(&__modem.lock);
 
     return MODEM_RET_OK;
@@ -260,16 +282,20 @@ modem_ret_t modem_send_cmd(modem_cmd_id_t id, char *reply, ssize_t *sz,
 {
     va_list           ap;
     modem_ret_t       ret;
-    char              *arg;
-    char              *ptr_d;
+    char              *arg, *ptr_d;
     const char        *ptr_s;
     const modem_cmd_t *cmd;
-    int               args, try;
+    int               args;
+    modem_status_t    status;
+    struct timespec   tstart, tnow;
 
-    try   = 0;
     cmd   = &modem_cmd[id];
     args  = cmd->args_num;
     ptr_s = cmd->cmd;
+
+    status = __modem.status;
+    if ((status & MODEM_STATUS_ONLINE) == 0)
+        return MODEM_RET_AT;
 
     pthread_mutex_lock(&__modem.lock);
 
@@ -306,14 +332,14 @@ modem_ret_t modem_send_cmd(modem_cmd_id_t id, char *reply, ssize_t *sz,
     }
 
     /* Set <LN>.  Terminate with '\0' for debug purposes. */
-//   __atcmd.buf[__atcmd.len ++] = '\r';
-//   __atcmd.buf[__atcmd.len]    = '\0';
     __atcmd.buf[__atcmd.len]     = '\r';
     __atcmd.buf[__atcmd.len + 1] = '\0';
 
     dbg("Sending: ");
     __print_output((unsigned char *)__atcmd.buf, 0, __atcmd.len + 1);
 
+    /* Just in case we have a command beng processed by modem */
+    modem_send_raw((uint8_t *)"\r", 1);
     ret = modem_send_raw((uint8_t *)__atcmd.buf, __atcmd.len + 1);
     if (ret != MODEM_RET_OK) {
         __modem.status |= MODEM_STATUS_ERR;
@@ -329,28 +355,46 @@ modem_ret_t modem_send_cmd(modem_cmd_id_t id, char *reply, ssize_t *sz,
 
     pthread_mutex_unlock(&__modem.lock);
 
-    if (delay != 0)
-        GRACE_TIME(AT_TIMEOUT_REPLY_WAIT);
+    /* Wait a bit before returning control, we easily can spam
+       the shit out of modem. */
+    GRACE_TIME(AT_TIMEOUT_REPLY_WAIT);
 
     /* Check if reply is actually needed */
     if (!reply)
         return MODEM_RET_OK;
 
     *sz = -1;
-    if (reply) {
-    __get_reply_retry:
-        if (try > MODEM_WAIT_REPLY_TRIES)
-            return MODEM_RET_TIMEOUT;
-        ret = modem_get_reply(reply, sz, res);
-        if (ret != MODEM_RET_OK) {
-            GRACE_TIME(MODEM_WAIT_REPLY_SLEEP);
-            try ++;
-            goto __get_reply_retry;
-        }
+    if (!reply)
+        return ret;
 
-        if (res != NULL)
-            dbg("Command result=%d\n", *res);
+    if (delay == 0)
+        delay = REPLY_DEFAULT_TIMEOUT;
+
+    clock_gettime(CLOCK_MONOTONIC, &tstart);
+
+    do {
+        status = __modem.status;
+        /* Check if modem is initialized and operating correctly */
+        if ((status & MODEM_STATUS_ONLINE) == 0)
+            return MODEM_RET_AT;
+
+        ret = modem_get_reply(reply, sz, res);
+        if (ret == MODEM_RET_OK)
+            break;
+
+        GRACE_TIME(AT_TIMEOUT_REPLY_WAIT);
+
+        clock_gettime(CLOCK_MONOTONIC, &tnow);
+//        dbg("%lu - %lu = %lu ? %d\n", tnow.tv_sec, tstart.tv_sec,
+//            tnow.tv_sec - tstart.tv_sec, delay);
+    } while ((tnow.tv_sec - tstart.tv_sec) < delay);
+
+    /* Timeout checking */
+    if (ret != MODEM_RET_OK) {
+        return MODEM_RET_TIMEOUT;
     }
+    if (res != NULL)
+        dbg("Command result=%d\n", *res);
 
     return ret;
 }
@@ -365,10 +409,9 @@ modem_ret_t modem_conn_start(unsigned int prof)
     if (prof > 9)
         return MODEM_RET_PARAM;
 
-    sprof[0] = (char)(48 + prof);
-    sprof[1] = '\0';
+    FILL_PROF(sprof, prof);
 
-    ret = modem_send_cmd(MODEM_CMD_CONN_START, reply, &sz, &res, 1, sprof);
+    ret = modem_send_cmd(MODEM_CMD_CONN_START, reply, &sz, &res, 0, sprof);
     if (ret != MODEM_RET_OK)
         return ret;
     if (res != 0)
@@ -388,10 +431,9 @@ modem_ret_t modem_conn_stop(unsigned int prof)
     if (prof > 9)
         return MODEM_RET_PARAM;
 
-    sprof[0] = (char)(48 + prof);
-    sprof[1] = '\0';
+    FILL_PROF(sprof, prof);
 
-    ret = modem_send_cmd(MODEM_CMD_CONN_STOP, reply, &sz, &res, 1, sprof);
+    ret = modem_send_cmd(MODEM_CMD_CONN_STOP, reply, &sz, &res, 0, sprof);
     if (ret != MODEM_RET_OK)
         return ret;
     if (res != 0)
@@ -404,23 +446,50 @@ modem_ret_t modem_configure(void)
 {
     char    reply[512];
     ssize_t sz;
-    int     res;
+    int     res, ret;
 
-    /* Base configuration, set baud rate and commands response format */
-    modem_send_cmd(MODEM_CMD_RESCODE_FMT, NULL, NULL, NULL, 1, "0");
-    modem_send_cmd(MODEM_CMD_BAUD_SET,    NULL, NULL, NULL, 1, "115200");
-    /* SICS setup */
-    modem_send_cmd(MODEM_CMD_SICS,NULL,NULL,NULL,1,"0", "CONTYPE", "GPRS0");
-    modem_send_cmd(MODEM_CMD_SICS,NULL,NULL,NULL,1,"0", "DNS1", "81.18.113.2");
-    modem_send_cmd(MODEM_CMD_SICS,NULL,NULL,NULL,1,"0", "DNS2", "81.18.112.50");
-    modem_send_cmd(MODEM_CMD_SICS,NULL,NULL,NULL,1,"0", "PASSWD", "none");
-    modem_send_cmd(MODEM_CMD_SICS,NULL,NULL,NULL,1,"0", "USER", "none");
-    modem_send_cmd(MODEM_CMD_SICS,NULL,NULL,NULL,1,"0", "APN", "inet.bwc.ru");
-    /* SISS setup */
-    modem_send_cmd(MODEM_CMD_SISS,NULL,NULL,NULL,1,"0", "SRVTYPE", "Socket");
-    modem_send_cmd(MODEM_CMD_SISS,NULL,NULL,NULL,1,"0", "CONID", "0");
-    modem_send_cmd(MODEM_CMD_SISS,reply,&sz,&res,1,"0", "ADDRESS",
+    /* Basic modem configuration
+     * 1. Set bitrate
+     * 2. Change command response format
+     * 3. Turn on CREG URC messages
+     */
+    modem_send_cmd(MODEM_CMD_BAUD_SET,    NULL, NULL, NULL, 0, "115200");
+    modem_send_cmd(MODEM_CMD_RESCODE_FMT, NULL, NULL, NULL, 0, "0");
+    modem_send_cmd(MODEM_CMD_CREG_SET,    NULL, NULL, NULL, 0, "2");
+
+    /* Try to register with GPRS service */
+    ret = modem_send_cmd(MODEM_CMD_GPRS_REG, reply, &sz, &res,
+                         REPLY_REG_TIMEOUT,"1");
+    if (ret != MODEM_RET_OK)
+        return ret;
+    if (res != 0)
+        return MODEM_RET_AT;
+
+    /* TODO: Check configuration file(if present, try to load profiles if
+       theres no configuration file */
+
+    /* Configure internet connection setup profile */
+    modem_send_cmd(MODEM_CMD_SICS,NULL,NULL,NULL,0,"0","CONTYPE","GPRS0");
+    modem_send_cmd(MODEM_CMD_SICS,NULL,NULL,NULL,0,"0","DNS1", "81.18.113.2");
+    modem_send_cmd(MODEM_CMD_SICS,NULL,NULL,NULL,0,"0","DNS2", "81.18.112.50");
+    modem_send_cmd(MODEM_CMD_SICS,NULL,NULL,NULL,0,"0","PASSWD", "none");
+    modem_send_cmd(MODEM_CMD_SICS,NULL,NULL,NULL,0,"0","USER",   "none");
+    modem_send_cmd(MODEM_CMD_SICS,NULL,NULL,NULL,0,"0","APN",    "inet.bwc.ru");
+
+    /* Configure internet service setup profile */
+    modem_send_cmd(MODEM_CMD_SISS,NULL,NULL,NULL,0,"0", "SRVTYPE", "Socket");
+    modem_send_cmd(MODEM_CMD_SISS,NULL,NULL,NULL,0,"0", "CONID", "0");
+    modem_send_cmd(MODEM_CMD_SISS, reply, &sz, &res, 0, "0", "ADDRESS",
                    "socktcp://46.254.241.6:48026;disnagle=1");
+
+    /* Save profule */
+    modem_send_cmd(MODEM_CMD_SAVE_PROFILE, NULL, NULL, NULL, 0, "all", "save");
+
+    /* Setup internet connection URC's */
+    modem_send_cmd(MODEM_CMD_SCFG, NULL, NULL, NULL, 0, "Tcp/WithURCs", "on");
+
+    /* Give modem some timeout */
+    sleep(3);
 
     return MODEM_RET_OK;
 }
@@ -428,32 +497,63 @@ modem_ret_t modem_configure(void)
 modem_ret_t modem_send_packet(unsigned int prof,
                               const uint8_t *data, size_t len)
 {
-//    modem_ret_t ret;
-    char        plen[5], sprof[2];
-    uint8_t     ps[2];
-    uint16_t    len_no;
+    char     plen[5], sprof[2];
+    uint8_t  ps[2];
+    uint16_t len_no;
 
     if ((len + 2) & 0x1FFFF0000)
         return MODEM_RET_PARAM;
     if (prof > 9)
         return MODEM_RET_PARAM;
 
-    sprof[0] = (char)(48 + prof);
-    sprof[1] = '\0';
+    FILL_PROF(sprof, prof);
 
     len_no = htons(len);
     memcpy(ps, &len_no, 2);
 
     snprintf(plen, 5, "%d", (uint16_t)(len + 2));
+
+    pthread_mutex_lock(&__modem.lock);
+    if ((__modem.status & MODEM_STATUS_WREADY) == 0) {
+        pthread_mutex_unlock(&__modem.lock);
+        return MODEM_RET_AT;
+    }
+
+    __modem.status &= ~MODEM_STATUS_WREADY;
+    pthread_mutex_unlock(&__modem.lock);
+
     CHECK_RET(modem_send_cmd(MODEM_CMD_PACKET_SEND1,
-                             NULL, NULL, NULL, 1, "1", plen));
+                             NULL, NULL, NULL, 0, sprof, plen));
     CHECK_RET(modem_send_raw(ps, 2));
     CHECK_RET(modem_send_raw(data, len));
     CHECK_RET(modem_send_cmd(MODEM_CMD_PACKET_SEND2,
-                             NULL, NULL, NULL, 1, sprof, "0", "0"));
+                             NULL, NULL, NULL, 0, sprof, "0", "0"));
 
     return MODEM_RET_OK;
 }
+
+modem_ret_t modem_get_packet(unsigned int prof, uint8_t *data, ssize_t *sz)
+{
+    char    sprof[2], reply[128];
+    char    buf[512];
+    int     res;
+
+    FILL_PROF(sprof, prof);
+
+    pthread_mutex_lock(&__modem.lock);
+    if ((__modem.status & MODEM_STATUS_RPEND) == 0) {
+        pthread_mutex_unlock(&__modem.lock);
+        return MODEM_RET_AT;
+    }
+    pthread_mutex_unlock(&__modem.lock);
+
+    CHECK_RET(modem_send_cmd(MODEM_CMD_PACKET_READ,
+                             data, &ssz, &res, 0, sprof, "1024"));
+
+    return MODEM_RET_OK;
+}
+
+/* ==================================================================== */
 
 static void *__modem_thread(void *arg)
 {
@@ -472,7 +572,7 @@ static void *__modem_thread(void *arg)
 
         timeout = 0;
 
-        ret = poll(fds, 1, 100);
+        ret = poll(fds, 1, 200);
         if (ret < 0)
             continue;
         else if (ret == 0)
@@ -518,6 +618,9 @@ static void *__modem_thread(void *arg)
 static int __process_CMD(const char *buf, size_t sz)
 {
     unsigned int i;
+
+    dbg("Checking(%lu):", sz);
+    __print_output((uint8_t *)buf, 0, sz);
 
     for (i = 0; i < sz; i++) {
         if (__cmdp.ind == CMD_PARSER_BUF_SZ) { /* Command reply is longer then
@@ -667,8 +770,10 @@ static void __parse_URC_SISW(void)
     prof    = strtol(__urcp.buf + 7, NULL, 10);
     urcCode = strtol(__urcp.buf + 9, NULL, 10);
 
-    if (prof == 0 && urcCode == 1)
+    if (prof == TCS_SERVICE_PROF && urcCode == AT_URC_SISW_WREADY)
         __modem.status |= (MODEM_STATUS_CONN|MODEM_STATUS_WREADY);
+    else if (prof == TCS_SERVICE_PROF && urcCode == AT_URC_SISW_WCLOSED)
+        __modem.status &= ~(MODEM_STATUS_CONN|MODEM_STATUS_WREADY);
 }
 
 static void __parse_URC_SISR(void)
@@ -680,14 +785,14 @@ static void __parse_URC_SISR(void)
     prof    = strtol(__urcp.buf + 7, NULL, 10);
     urcCode = strtol(__urcp.buf + 9, NULL, 10);
 
-    if (prof == 0 && urcCode == 2) {
-        __modem.status &= ~MODEM_STATUS_CONN;
-    }
+    if (prof == TCS_SERVICE_PROF && urcCode == AT_URC_SISR_RPEND)
+        __modem.status |= MODEM_STATUS_RPEND;
+    else if (prof == TCS_SERVICE_PROF && urcCode == AT_URC_SISR_RCLOSED)
+        __modem.status &= ~(MODEM_STATUS_CONN|MODEM_STATUS_RPEND);
 }
 
 static void __parse_URC_SIS(void)
 {
-    char msg[128];
     unsigned int prof;
     unsigned int urc_cause, urc_infoid;
 
@@ -696,12 +801,19 @@ static void __parse_URC_SIS(void)
     urc_infoid = strtol(__urcp.buf + 10, NULL, 10);
 
     dbg("Error. Profile=%d; Cause=%d; Info=%d\n", prof, urc_cause, urc_infoid);
+
+    if (urc_cause == 0) {
+        if (urc_infoid == URC_INFOID_SOCK_PEERCLOSE) {
+            __modem.status &= ~(MODEM_STATUS_CONN|MODEM_STATUS_RPEND|
+                                MODEM_STATUS_WREADY);
+        }
+    }
 }
 
 
 static void __parse_URC(void)
 {
-    dbg("URC: ");
+    dbg("<URC>:  ");
     __print_output((uint8_t *)__urcp.buf, 0, __urcp.ind);
 
     if (IS_URC("+CREG:")) {
@@ -723,7 +835,7 @@ static void __reset_CMD_parser(void)
     memset(__cmdp.buf, 0, CMD_PARSER_BUF_SZ);
 }
 
-#ifdef DEBUG
+#ifdef MODEM_DEBUG
 static void __print_output(const unsigned char *buf, off_t s, size_t sz)
 {
     unsigned int i;
@@ -742,6 +854,4 @@ static void __print_output(const unsigned char *buf, off_t s, size_t sz)
 
     printf("\n");
 }
-#else
-#define __print_output(x...) do { } while (0)
 #endif
