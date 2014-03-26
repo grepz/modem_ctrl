@@ -163,6 +163,8 @@
     - 2001 - 4000 Info on progress of service
     - 4001 - 6000 Warning, no abort
     - 6001 - 8000 Notes
+  - ^SISR:
+  - ^SISW:
 | urcInfoId | Description                                            | Class  |
 |-----------+--------------------------------------------------------+--------|
 |         2 | invalid socket descr                                   | Socket |
@@ -215,7 +217,7 @@
 |        85 | PAP auth failed                                        | PPP    |
 |        86 | CHAP auth failed                                       | PPP    |
 |        87 | IPCP failed                                            | PPP    |
-|           |                                                        |        |
+|       201 | Client error, <Response>                               | HTTP   |
 
 
 * AT/URC
@@ -282,35 +284,42 @@
 - [X] Setup URC messages for internet connection: at^scfg="Tcp/WithURCs", "on"
 
 ** Working cycle
-*** Check for URC in loop
-- Check for ^SISW:
+*** Check for URC in loop [5/6]
+- [X] Check for ^SISW:
   ^SISW: <SrvProfId>, <urcCauseId>
   if urcCauseId == 1:
     Set WREADY status
   If urcCauseId == 2:
     Remove WREADY status. Service may be closed.
 
-- Check for ^SISR:
+- [X] Check for ^SISR:
   ^SISR: <SrvProfId>, <urcCauseId>
   if urcCauseId == 1:
     Set RPEND status. We have data to read.
   if urcCauseId == 2
     Remove RPEND status. Service may be closed.
 
-- Check for ^SIS:
+- [X] Check for ^SIS:
   ^SIS: <SrvProfiId>, <urcCause>[, <urcInfoId>[, <urcInfoText>]]
   if urcCause == 0 && urcInfoId == URC_INFOID_SOCK_PEERCLOSE
     Reset connection state
 
-- Check for SYSSTART
+- [X] Check for SYSSTART
   Completly reinit modem functions
 
-- Check for SHUTDOWN
+- [ ] Check for SHUTDOWN
   Stop modem functions
 
-- Check for +CREG
+- [X] Check for +CREG
   see  __parse_URC_CREG
 
 *** Check after SISO
 - After service is opened with AT^SISO, we should receive
   ^SISW: <SrvProfId>,1
+** Sending/receiving data
+*** Sending packet [2/2]
+- [X] Create bson object
+- [X] Call modem_send_packet supplying bson object data buffer
+*** Receiving packet [1/1]
+- [X] Check for RPEND, if flag is set, start reading
+- [ ] 

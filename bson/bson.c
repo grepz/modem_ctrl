@@ -1110,6 +1110,8 @@ int _bson_errprintf( const char *format, ... ) {
  *  @param
  */
 void bson_builder_error( bson *b ) {
+    (void)b;
+
     if( err_handler )
         err_handler( "BSON error." );
 }
