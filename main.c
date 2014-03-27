@@ -33,7 +33,8 @@
 #define DEV_AUTH     1
 #define DEV_AUTHWAIT 2
 
-#define AUTH_MAX_TRIES 15
+#define MAX_DOWNLOAD_TRIES 5
+#define AUTH_MAX_TRIES     15
 
 static unsigned int __auth       = DEV_NOAUTH;
 static unsigned int __auth_tries = 0;
@@ -42,9 +43,8 @@ static int __client_auth(modem_status_t status);
 static int __get_IMEI(char *IMEI);
 //static bson __update_form_req(void);
 static bson __auth_form_req(void);
-static int __get_bin(modem_status_t status);
+static modem_ret_t __get_bin(modem_status_t status);
 static int __check_auth_reply(void);
-
 static int __modem_configure(void);
 
 int main(int argc, char *argv[])
@@ -87,8 +87,7 @@ __modem_start:
     }
 
     for (;;) {
-        sleep(1);
-        modem_status_get(&status, &err);
+        modem_get_status(&status, &err);
         printf("Status=%04X, error=%04X, auth=%d\n", status, err, __auth);
         if ((status & MODEM_STATUS_ONLINE) == 0) { /* Full restart */
             modem_destroy();
@@ -99,13 +98,13 @@ __modem_start:
             continue;
         }
 
-        ret = modem_conn_start(BP_SERVICE_PROF);
-        if (ret != MODEM_RET_OK) {
-            ret = modem_conn_stop(BP_SERVICE_PROF);
-            continue;
-        }
+       ret = modem_conn_start(BP_SERVICE_PROF);
+       if (ret != MODEM_RET_OK) {
+           ret = modem_conn_stop(BP_SERVICE_PROF);
+           continue;
+       }
 
-        sleep(15);
+       sleep(10);
 
         __get_bin(status);
     }
@@ -113,7 +112,6 @@ __modem_start:
 #if 0
     for (;;) {
         sleep(1);
-        modem_status_get(&status, &err);
         printf("Status=%04X, error=%04X, auth=%d\n", status, err, __auth);
 
         if ((status & MODEM_STATUS_ONLINE) == 0) { /* Full restart */
@@ -139,41 +137,56 @@ __modem_start:
     return EXIT_SUCCESS;
 }
 
-static int __get_bin(modem_status_t status)
+static modem_ret_t __get_bin(modem_status_t status)
 {
-    int fd, res, tries = 0;
-    modem_ret_t ret;
-    ssize_t len;
-    uint8_t *data;
-    mode_t mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+    int          fd, res, tries;
+    modem_ret_t  ret;
+    ssize_t      len;
+    uint8_t      *data;
+    mode_t       mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+    conn_state_t cs;
 
     fd = open("/tmp/file.bin", O_RDWR | O_CREAT | O_TRUNC, mode);
     if (fd == -1)
-        exit(EXIT_FAILURE);
+        return MODEM_RET_IO;
 
-    do {
-        if (tries == 3)
-            return -1;
+    tries = 0;
+
+    for (;;) {
+        if (tries == MAX_DOWNLOAD_TRIES)
+            return MODEM_RET_TIMEOUT;
+
+        if (modem_get_connstate(BP_SERVICE_PROF, &cs) != MODEM_RET_OK)
+            continue;
+
+        printf("Connection status=%d, RX=%d, TX=%d\n",
+               cs.state, cs.rx, cs.tx);
+
+        if (cs.state != MODEM_AT_CONN_UP)
+            return MODEM_RET_CONN;
+
         ret = modem_send_cmd(MODEM_CMD_DATA_READ,&data,&len,&res,0,"2","1500");
         printf("Reading, fret=%d, result=%d, len=%ld\n", ret, res, len);
         if (ret == MODEM_RET_TIMEOUT) {
             tries ++;
             continue;
         } else if (ret != MODEM_RET_OK)
-            break;
+            return ret;
+
+        if (len == -2) return EXIT_SUCCESS;
+
+        tries = 0;
 
         if (len > 0) {
             printf("Writing data of length=%lu\n", len);
             write(fd, data, len);
             free(data);
         }
-    } while (len != -2);
+    }
 
     printf("Finished getting binary!\n");
 
     close(fd);
-
-    exit(EXIT_SUCCESS);
 
     return 0;
 }

@@ -1,23 +1,23 @@
 #ifndef __MODEM_H
 #define __MODEM_H
 
-#define GSM_CONN_PROF         0 /* Default connection profile */
+#define GSM_CONN_PROF            0 /* Default connection profile */
 
-#define TCS_SERVICE_PROF      0 /* TCS service profile number */
-#define TUS_SERVICE_PROF      1 /* TUS service profile number */
-#define BP_SERVICE_PROF       2 /* TUS service profile number */
-
-#define REPLY_DEFAULT_TIMEOUT 30  /* Default reply timeout */
-#define REPLY_REG_TIMEOUT     300 /* GPRS service registration timeout. It
-                                     can take up to 5 minutes to register
-                                     in providers network */
-#define MODEM_BITRATE         115200 /* BGS2-W-R2 with factory settings works on
-                                     autobauding which means some URC messages
-                                     are skip, so we setup bitrate as we see
-                                     fit */
-
-#define MODEM_RXBUF_MAXLEN    2048 /* Receive buffer max length */
-#define MODEM_CMDBUF_SZ       256  /* Max cmd len */
+#define TCS_SERVICE_PROF         0 /* TCS service profile number */
+#define TUS_SERVICE_PROF         1 /* TUS service profile number */
+#define BP_SERVICE_PROF          2 /* TUS service profile number */
+#define REPLY_DEFAULT_TIMEOUT    30  /* Default reply timeout */
+#define REPLY_REG_TIMEOUT        300 /* GPRS service registration timeout. It
+                                      * can take up to 5 minutes to register
+                                      * in providers network
+                                      */
+#define MODEM_BITRATE            115200 /* BGS2-W-R2 with factory settings
+                                         * works on autobauding which means
+                                         * some URC messages are skip, so we
+                                         * setup bitrate as we see fit
+                                         */
+#define MODEM_RXBUF_MAXLEN       2048 /* Receive buffer max length */
+#define MODEM_CMDBUF_SZ          256  /* Max cmd len */
 
 /* Page 277 of manual */
 #define MODEM_AT_CONN_ERROR     -1 /* Software error */
@@ -26,33 +26,34 @@
 #define MODEM_AT_CONN_UP         4 /* Data transfer is ready */
 #define MODEM_AT_CONN_CLOSING    5 /* Connection is closing */
 #define MODEM_AT_CONN_DOWN       6 /* - Service is finished
-                                      - Remote conn reset
-                                      - IP connection was closed
-                                      because of error
-                                   */
+                                    * - Remote conn reset
+                                    * - IP connection was closed(error)
+                                    */
 #define MODEM_AT_CONN_ALERTING   7 /* Client tries to connect with
-                                      transparent TCP listener
-                                      service
-                                   */
+                                    * transparent TCP listener
+                                    * service
+                                    */
 #define MODEM_AT_CONN_CONNECTED  8 /* Client is connected with
-                                      transparent TCP listener service
-                                   */
+                                    * transparent TCP listener service
+                                    */
 #define MODEM_AT_CONN_RELEASED   9 /* Client disconnected from
-                                      transparent TCP listener service
-                                      but theres data to read
-                                   */
+                                    * transparent TCP listener service
+                                    * but theres data to read
+                                    */
 /* Page 196 of manual */
 #define MODEM_AT_REG_NOREG       0 /* Modem not registered and not
-                                      searching for network.
-                                      Technical problem. Possible reasons:
-                                      1. No SIM
-                                      2. No PIN
-                                      3. No valid home PLMN on SIM */
+                                    * searching for network.
+                                    * Technical problem. Possible reasons:
+                                    * 1. No SIM
+                                    * 2. No PIN
+                                    * 3. No valid home PLMN on SIM
+                                    */
 #define MODEM_AT_REG_OK          1 /* Registered to home network */
 #define MODEM_AT_REG_SEARCHING   2 /* ME searching for network. If
-                                      minute or more passed and theres
-                                      no registration, there might be some
-                                      technical problem */
+                                    * minute or more passed and theres
+                                    * no registration, there might be some
+                                    * technical problem
+                                    */
 #define MODEM_AT_REG_DENIED      3 /* Registration denied */
 #define MODEM_AT_REG_UNKNOWN     4 /* Not used */
 #define MODEM_AT_REG_ROAMING     5 /* ME is on foreign network */
@@ -162,6 +163,7 @@ typedef enum {
     MODEM_RET_PARAM,
     MODEM_RET_IO,
     MODEM_RET_MEM,
+    MODEM_RET_CONN,
     MODEM_RET_SYS,
     MODEM_RET_AT,
     MODEM_RET_TIMEOUT,
@@ -214,10 +216,8 @@ typedef struct __modem_dev
     int             fd;
     pthread_mutex_t lock;
     pthread_t       tid;
-    modem_status_t  status; /* Modem status bitset, for connection status
-                             * see conn_state_t                           */
-    modem_err_t     err;    /* Modem error bitset                         */
-    conn_state_t    conn;   /* Connection state and parameters            */
+    modem_status_t  status; /* Modem status mask, see conn_state_t */
+    modem_err_t     err;    /* Modem error bitset                  */
 } modem_dev_t;
 
 typedef struct __urc_parser
@@ -273,7 +273,7 @@ void modem_destroy(void);
  * @param status Pointer to allocated variable
  * @param err Pointer to allocated variable
  */
-void modem_status_get(modem_status_t *status, modem_err_t *err);
+void modem_get_status(modem_status_t *status, modem_err_t *err);
 /**
  * Clear error states
  * TODO:
@@ -395,5 +395,14 @@ modem_ret_t modem_get_data(uint8_t **data, ssize_t *len, ...);
  * @return see modem_ret_t
  */
 modem_ret_t modem_get_err(int *loc, int *reason);
+/**
+ * Get connection state using AT^SISI command
+ *
+ * @param prof Profile to query
+ * @param s connection state structure to be filled. Should be allocated by user
+ *
+ * @return see modem_ret_t
+ */
+modem_ret_t modem_get_connstate(unsigned int prof, conn_state_t *s);
 
 #endif
