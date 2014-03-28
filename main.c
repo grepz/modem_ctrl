@@ -86,6 +86,7 @@ __modem_start:
         return EXIT_FAILURE;
     }
 
+#if 0
     for (;;) {
         modem_get_status(&status, &err);
         printf("Status=%04X, error=%04X, auth=%d\n", status, err, __auth);
@@ -108,10 +109,12 @@ __modem_start:
 
         __get_bin(status);
     }
+#endif
 
-#if 0
     for (;;) {
         sleep(1);
+
+        modem_get_status(&status, &err);
         printf("Status=%04X, error=%04X, auth=%d\n", status, err, __auth);
 
         if ((status & MODEM_STATUS_ONLINE) == 0) { /* Full restart */
@@ -132,7 +135,6 @@ __modem_start:
 
         __client_auth(status);
     }
-#endif
 
     return EXIT_SUCCESS;
 }
@@ -156,14 +158,12 @@ static modem_ret_t __get_bin(modem_status_t status)
         if (tries == MAX_DOWNLOAD_TRIES)
             return MODEM_RET_TIMEOUT;
 
-        if (modem_get_connstate(BP_SERVICE_PROF, &cs) != MODEM_RET_OK)
-            continue;
-
-        printf("Connection status=%d, RX=%d, TX=%d\n",
-               cs.state, cs.rx, cs.tx);
-
-        if (cs.state != MODEM_AT_CONN_UP)
-            return MODEM_RET_CONN;
+//        if (modem_get_connstate(BP_SERVICE_PROF, &cs) != MODEM_RET_OK)
+//            continue;
+//        printf("Connection status=%d, RX=%d, TX=%d\n",
+//               cs.state, cs.rx, cs.tx);
+//        if (cs.state != MODEM_AT_CONN_UP)
+//            return MODEM_RET_CONN;
 
         ret = modem_send_cmd(MODEM_CMD_DATA_READ,&data,&len,&res,0,"2","1500");
         printf("Reading, fret=%d, result=%d, len=%ld\n", ret, res, len);
@@ -173,7 +173,8 @@ static modem_ret_t __get_bin(modem_status_t status)
         } else if (ret != MODEM_RET_OK)
             return ret;
 
-        if (len == -2) return EXIT_SUCCESS;
+        if (len == -2)
+            exit(EXIT_SUCCESS);
 
         tries = 0;
 
@@ -198,10 +199,11 @@ static int __client_auth(modem_status_t status)
 
     (void)status;
 
-    if (__auth == DEV_AUTH) /* Already authenticated */
-        return 0;
 
-    if (__auth == DEV_NOAUTH) { /* No auth, no request sent */
+    switch (__auth) {
+    case DEV_AUTH:     /* Already authenticated */
+        return 0;
+    case DEV_NOAUTH:   /* No auth, no request sent */
         printf("Sending authentication request.\n");
 
         req = __auth_form_req();
@@ -217,42 +219,46 @@ static int __client_auth(modem_status_t status)
 
         __auth      = DEV_AUTHWAIT;
         __auth_tries = 0;
-    } else if (__auth == DEV_AUTHWAIT) { /* No auth, request sent */
+        break;
+    case DEV_AUTHWAIT: /* No auth, request sent */
         if (__auth_tries > AUTH_MAX_TRIES) { /* Reply wait limit exceeded */
             __auth = DEV_NOAUTH;
-            /* TODO: Close connection */
             return -1;
         }
 
-        __check_auth_reply();
+        if (__check_auth_reply() == 0) {
+            __auth = DEV_AUTH;
+            return 0;
+        }
 
         __auth_tries ++;
+        break;
     }
 
-    return 0;
+    return 1;
 }
 
 static int __check_auth_reply(void)
 {
+    int         res;
     modem_ret_t ret;
-    size_t      sz;
-    uint8_t     *rbuf;
+    ssize_t     len;
+    uint8_t     *data;
     bson        b;
 
-    ret = 0;
-//    ret = modem_get_packet(TCS_SERVICE_PROF, &rbuf, &sz);
+    ret = modem_get_packet(TCS_SERVICE_PROF, &data, &len);
     if (ret != MODEM_RET_OK) {
         printf("Error getting server packet=%d\n", ret);
         return -1;
     }
 
-    printf("Decoding BSON data of size=%lu\n", sz);
+    printf("Decoding BSON data of size=%ld\n", len);
 
-    bson_init_unfinished_data(&b, (char *)rbuf, sz, 0);
+    bson_init_unfinished_data(&b, (char *)data + 2, len - 2, 0);
     bson_print(&b);
 
     bson_destroy(&b);
-    free(rbuf);
+    free(data);
 
     return 0;
 }

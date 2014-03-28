@@ -223,6 +223,34 @@ void modem_get_status(modem_status_t *status, modem_err_t *err)
     pthread_mutex_unlock(&__modem.lock);
 }
 
+modem_ret_t modem_get_packet(unsigned int prof, uint8_t **data, ssize_t *len)
+{
+    char sprof[2];
+    int res;
+    modem_ret_t ret;
+    uint16_t psz;
+
+    FILL_PROF(sprof, prof);
+
+    ret = modem_send_cmd(MODEM_CMD_DATA_READ, data, len, &res, 0,
+                         sprof, "1500");
+    if (ret != MODEM_RET_OK)
+        return ret;
+    if (*len <= 0)
+        return MODEM_RET_AT;
+
+    memcpy(&psz, *data, 2);
+    psz = ntohs(psz);
+
+    if (*len != psz + 2) {
+        printf("------> %ld/%ld\n", *len, psz + 2);
+        free(*data);
+        return MODEM_RET_CONN;
+    }
+
+    return MODEM_RET_OK;
+}
+
 modem_ret_t modem_get_connstate(unsigned int prof, conn_state_t *s)
 {
     char sprof[2];
@@ -990,81 +1018,5 @@ static void __print_output(const unsigned char *buf, off_t s, size_t sz)
     }
 
     printf("\n");
-}
-#endif
-
-#if 0
-modem_ret_t modem_get_data(uint8_t **data, ssize_t *len, ...)
-{
-    char         sprof[2];//, sdlen[4];
-    modem_status_t    status;
-    uint8_t      buf[1500 + 15]; /* 1500b of packet + 15b at max of AT URC */
-    uint8_t      *ptr;
-    int          res, r_read;
-    unsigned int r_prof;
-    ssize_t      sz;
-    uint16_t     psz;
-    va_list ap;
-    modem_ret_t ret;
-
-    status = __modem.status;
-    if ((status & MODEM_STATUS_ONLINE) == 0)
-        return MODEM_RET_AT;
-
-//    if (dlen > 1500 || sscanf(sdlen, "%hu", dlen) == EOF)
-//        return MODEM_RET_PARAM;
-
-//    FILL_PROF(sprof, prof);
-
-    /* Prepare SISR command and set flag to parse binary data */
-    pthread_mutex_lock(&__modem.lock);
-    /* Clear read pending flag */
-    if (__modem.status & MODEM_STATUS_RPEND)
-        __modem.status &= ~MODEM_STATUS_RPEND;
-    va_start(ap, len);
-    __prepare_at_cmd(MODEM_CMD_DATA_READ, ap);
-    va_end(ap);
-    __modem.status |= MODEM_STATUS_DATACHECK;
-    __reset_data_parser();
-    ret = __send_at_cmd();
-    pthread_mutex_unlock(&__modem.lock);
-
-    if (ret != MODEM_RET_OK)
-        return ret;
-
-    GRACE_TIME(AT_TIMEOUT_REPLY_WAIT);
-
-    r_prof = strtol((const char *)(buf + 8), NULL, 10);
-    r_read = strtol((const char *)(buf + 10), (char **)&ptr, 10);
-    /* Check if profile number returned match profile number requested */
-//    if (r_prof != prof)
-//        return MODEM_RET_AT;
-    /* Check that we have parsed leading <SISR: n,m> string correctly */
-    if ((buf + 10) == ptr)
-        return MODEM_RET_PARSER;
-    else if (r_read <= 0)
-        return MODEM_RET_AT;
-
-    memcpy(&psz, ptr + 1, 2);
-    psz = ntohs(psz);
-
-    dbg("Packet size=%d. Read size=%d\n", psz, r_read);
-
-    /* Check if we received message body correctly */
-    if ((psz + 2) != r_read)
-        return MODEM_RET_PARSER;
-
-    *data = calloc(1, psz);
-    if (!*data)
-        return MODEM_RET_MEM;
-
-    *len = psz;
-    memcpy(*data, ptr + 3, psz); /* Exclude leading \r and frame header */
-
-    dbg(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n");
-    __print_output(*data, 0, *len);
-    dbg("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n");
-
-    return MODEM_RET_OK;
 }
 #endif

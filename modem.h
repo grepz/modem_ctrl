@@ -378,14 +378,15 @@ modem_ret_t modem_http_config(const char *id, const char *sics_id,
 modem_ret_t modem_send_packet(unsigned int prof,
                               const uint8_t *data, size_t len);
 /**
- * Send SISR command and process its output
+ * Get packet data with packet frame(2b)
  *
- * @param data Data buffer to save to
- * @param len Resulting data buffer length
+ * @param prof Connection service profile
+ * @param data Data to return(needs to be free if function succ.)
+ * @param len Data length
  *
  * @return see modem_ret_t
  */
-modem_ret_t modem_get_data(uint8_t **data, ssize_t *len, ...);
+modem_ret_t modem_get_packet(unsigned int prof, uint8_t **data, ssize_t *len);
 /**
  * Send AT+CEER command and receive extended error report
  *
